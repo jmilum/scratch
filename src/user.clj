@@ -2,7 +2,7 @@
   (:require
    [clojure.main]
    [clojure.java.io :as jio]
-   [clojure.core.reducers :as r]
+   ;[clojure.core.reducers :as r]
    [clojure.pprint :refer [pprint pp]]
    [clojure.repl :refer [apropos dir doc find-doc pst source]]
    [clojure.set :as set]
@@ -18,17 +18,16 @@
    [clojure.core.matrix.operators :as mo]
    [com.hypirion.clj-xchart :as chart]
    [complex.core :as c]
-   [cquad.core :as cquad]
-   [infix.core :refer [base-env]]
-   [infix.math :refer [defbinary]]
-   [infix.macros :refer [infix from-string]]
-   [mikera.cljutils.loops :as loops])
+   [cquad.core :as cquad])
+   ;[infix.core :refer [base-env]]
+   ;[infix.math :refer [defbinary]]
+   ;[infix.macros :refer [infix from-string]]
+   ;[mikera.cljutils.loops :as loops])
   (:import
    (java.io File FileNotFoundException Reader BufferedReader)
    (java.util Date UUID)
    (clojure.lang BigInt Ratio)
-   (org.apache.commons.math3.complex ComplexField Complex)
-   (org.apache.commons.math3.linear ArrayFieldVector RealVector)))
+   (org.apache.commons.math3.complex Complex)))
 
 
 (set! *warn-on-reflection* true)
@@ -333,12 +332,6 @@
 ;    (partition 8))
 
 
-;(defn make-fopdt [k t d]
-;  (doto (FirstOrder. t 1.0 k) (.setDeadTime d)))
-;
-;(def a (make-fopdt 1 1 1))
-
-
 (defn poly-eval [poly val]
   (letfn [(term-rf [acc k v] (+ acc (* v (math/expt val k))))]
     (reduce-kv term-rf 0 poly)))
@@ -364,10 +357,6 @@
 
 (def poly-add (poly-fn +))
 (def poly-sub (poly-fn -))
-
-;(m/set-current-implementation :persistent-vector)
-;(m/set-current-implementation :clatrix)
-;(m/set-current-implementation :vectorz)
 
 (defn exp
   "eponential function e^x"
@@ -457,34 +446,62 @@
     (->map t y y* u)))
 
 
-;(defn step
-;  "unit step"
-;  [m]
-;  (let [{:keys [tmax tsamp fs sigma]} m
-;        t (range 0 tmax tsamp)
-;        n (inc (/ tmax tsamp))
-;        u (repeat n 1)
-;        f (fn [s] (c/* (c// s) (fs s)))
-;        y (map #(inverse-laplace f sigma %) t)]
-;    (->map t u y)))
+(defn ifft [t sigma delta f]
+  (fn [sum wi]
+    (let [witi (c/complex 0 (* wi t))
+          wfti (c/complex 0 (* (+ wi delta) t))
+          fi    (c/real-part (c/* (c/exp witi) (f (c/complex sigma wi))))
+          ff    (c/real-part (c/* (c/exp wfti) (f (c/complex sigma (+ wi delta)))))]
+      (+ sum (* 0.5 delta (+ fi ff))))))
 
-;(plot1 (step {:tmax 10
-;              :tsamp 0.1
-;              :sigma 0.1
-;              :fs (fn [s] (c// 1.5 (c/+ (c/* 1.5 s) 1)))}))
+(defn inverse-laplace
+  [f sigma t]
+  (let [nint 500
+        delta 0.01]
+    (-> (* sigma t)
+        (exp)
+        (* (reduce (ifft t sigma delta f) 0 (range 0 nint delta)))
+        (/ 3.14159))))
+
+(defn ifftm [t sigma delta f]
+  (fn [sum wi]
+      (let [witi (c/complex 0 (* wi t))
+            wfti (c/complex 0 (* (+ wi delta) t))
+            fi    (c/real-part (c/* (c/exp witi) (m/emap #(f (c/complex sigma %)) wi)))
+            ff    (c/real-part (c/* (c/exp wfti) (f (c/complex sigma (+ wi delta)))))]
+        (+ sum (* 0.5 delta (+ fi ff))))))
+
+(m/set-current-implementation :persistent-vector)
+
+(defn huddleston
+  [f sigma t]
+  (let [nint 500
+        delta 0.01
+        w1 (m/array (range 0 nint delta))
+        w1t (m/mul w1 t)
+        w2 (m/add w1 delta)
+        witi (m/emap #(c/exp (c/complex 0 %)) (m/mul wi t))
+        wfti (m/emap #(c/exp (c/complex 0 %)) (m/mul (m/add wi delta) t))]
 
 
+    (-> (* sigma t)
+        (exp)
+        (* (reduce (ifft t sigma delta f) 0 (range 0 nint delta)))
+        (/ 3.14159))))
+
+(defn step [m]
+  (let [defaults {:tmax 5 :tsamp 0.1 :sigma 0.1}
+        params (merge defaults m)
+        {:keys [tmax tsamp fy fu sigma]} params
+        t (range 0 tmax tsamp)
+        ys (fn [s] (c/* (c// s) (fy s)))
+        us (fn [s] (c/* (c// s) (fu s)))
+        y (map #(inverse-laplace ys sigma %) t)
+        u (map #(inverse-laplace us sigma %) t)]
+    (->map t y u)))
 
 
-
-;(defn model [process]
-;  (let [p (merge {:tmax 5 :tsamp 0.1 :sigma 0.01} process)]
-;    (-> p
-;        step
-;        arx
-;        simulate
-;        plot2)))
-
+;(m/set-current-implementation :ndarray)
 
 
 (defn pid [p i d]
@@ -506,62 +523,12 @@
 (defn y-dist [s] (c// (ps s) (open-loop s)))
 (defn u-dist [s] (c// (c/* -1 (ps s) (cs s)) (open-loop s)))
 
-;(defn ifft [t sigma delta f]
-;  (fn [sum wi]
-;      (let [witi (c/complex 0 (* wi t))
-;            wfti (c/complex 0 (* (+ wi delta) t))
-;            fi    (c/real-part (c/* (c/exp witi) (f (c/complex sigma wi))))
-;            ff    (c/real-part (c/* (c/exp wfti) (f (c/complex sigma (+ wi delta)))))]
-;        (+ sum (* 0.5 delta (+ fi ff))))))
-;
-;(defn inverse-laplace
-;  [f sigma t]
-;  (let [nint 500
-;        delta 0.01]
-;    (-> (* sigma t)
-;        (exp)
-;        (* (reduce (ifft t sigma delta f) 0 (range 0 nint delta)))
-;        (/ 3.14159))))
+(defn model [process]
+  (let [p (merge {:tmax 5 :tsamp 0.1 :sigma 0.01} process)]
+    (-> p
+        step
+        arx
+        simulate
+        plot3)))
 
-
-(defn ifft [t sigma delta f]
-  (fn [sum wi]
-      (let [witi (c/complex 0 (* wi t))
-            wfti (c/complex 0 (* (+ wi delta) t))
-            fi    (c/real-part (c/* (c/exp witi) (f (c/complex sigma wi))))
-            ff    (c/real-part (c/* (c/exp wfti) (f (c/complex sigma (+ wi delta)))))]
-        (+ sum (* 0.5 delta (+ fi ff))))))
-
-(defn inverse-laplace
-  [f sigma t]
-  (let [nint 500
-        delta 0.01]
-    (-> (* sigma t)
-        (exp)
-        (* (reduce (ifft t sigma delta f) 0 (range 0 nint delta)))
-        (/ 3.14159))))
-
-(defn step [m]
-  (let [defaults {:tmax 5 :tsamp 0.1 :sigma 0.1}
-        params (merge defaults m)
-        {:keys [tmax tsamp fs sigma]} params
-        t (range 0 tmax tsamp)
-        f (fn [s] (c/* (c// s) (fs s)))
-        x (map #(inverse-laplace f sigma %) t)]
-    (->map t x)))
-
-;(plot1 (step {:fs open-loop :tmax 10}))
-;(time (let [tmax 15
-;            sigma 0.1
-;            a (step {:fs y-spt :tmax tmax})
-;            b (step {:fs u-spt :tmax tmax})]
-;        (plot2 {:t (:t a) :x1 (:x a) :x2 (:x b)})))
-
-;(inverse-laplace (fn [s] (c// (c/+ s 1))) 0.1 2)
-
-
-(time (step {:fs y-spt :tmax 15}))
-
-(m/set-current-implementation :ndarray)
-
-(type (m/to [1 2 3]))
+;(time (model {:fy y-spt :fu u-spt :tmax 15}))
